@@ -10,51 +10,51 @@ const LANGS = {
 const DETAIL = {
   "Brief": "3-4",
   "Standard": "5-6",
-  "Detailed": "7-9"
+  "Detailed": "7-8"
 };
 
 const SCHEMA_HELP = `
-Each slide is a JSON object:
+Slide JSON schema:
 {
- "heading": "short, exact topic title from the lecture (max 8 words)",
- "bullets": ["0-3 SHORT, factual lines (max 12 words each). Use **bold** for exact terms/formulas"],
+ "heading": "exact topic title (max 8 words)",
+ "bullets": ["0-3 short factual lines (max 12 words each), use **bold** for key terms/formulas"],
  "visual": null OR one of:
-   {"type":"nested","items":["Outer set","Middle set","Inner set"]}
+   {"type":"nested","items":["Outer","Middle","Inner"]}
    {"type":"flow","items":["Step 1","Step 2","Step 3"],"direction":"vertical"}
-   {"type":"cards","items":[{"icon":"📌","title":"Exact term","text":"Short definition"}]}
+   {"type":"cards","items":[{"icon":"📌","title":"Term","text":"Short exact definition"}]}
    {"type":"steps","items":[{"title":"Step 1","text":"Exact action"}]}
-   {"type":"table","headers":["Criteria","A","B"],"rows":[["Feature","x","y"]]}
+   {"type":"table","headers":["Criteria","A","B"],"rows":[["Row","x","y"]]}
    {"type":"tree","root":{"label":"Topic","children":[{"label":"Part","children":[{"label":"Sub"}]}]}}
    {"type":"network","layers":[4,6,6,2],"labels":["Input","Hidden","Output"]}
    {"type":"code","language":"python","code":"line1\\nline2"}
    {"type":"compare","left":{"title":"A","points":["..."]},"right":{"title":"B","points":["..."]}}
  "footer": "optional one-line key formula or rule",
- "notes": "2-4 sentences speaker notes with exact explanation and examples",
+ "notes": "2-4 sentences speaker notes with exact numbers, formulas & examples",
  "timestamp": "MM:SS",
  "needs_screenshot": true or false,
- "screenshot_hint": "short 4-7 word label of what screenshot to paste here"
+ "screenshot_hint": "4-7 word label of what screenshot to paste here"
 }
 `;
 
 function buildSystemPrompt(lang, perChunk, isFirst, videoMode) {
   const src = videoMode
-    ? "a segment of a lecture VIDEO (extract spoken concepts + code/diagrams shown on screen)"
+    ? "a short segment of a lecture VIDEO (extract spoken concepts + code/diagrams shown on screen)"
     : "one timestamped section of a lecture TRANSCRIPT";
 
   const coverRule = isFirst
-    ? `\n- Because this is the FIRST section, also return "tagline" (max 6 words) and "cover" (nested, flow, tree, or network visual).`
+    ? `\n- First section ONLY: also return "tagline" (max 6 words) and "cover" (nested, flow, tree, or network visual).`
     : "";
   const coverTail = isFirst ? `, "tagline": "...", "cover": {...}` : "";
 
-  return `You are an expert presentation designer receiving ${src}. Be 100% factually accurate to the lecture.
+  return `You are an expert academic presentation designer receiving ${src}. Be 100% factually accurate to the lecture.
 ${SCHEMA_HELP}
 Rules:
-- Create ${perChunk} crisp slides in chronological order.
-- Never invent generic filler; use exact terms, formulas, and examples from the lecture.
-- Set "needs_screenshot": true with a clear "screenshot_hint" whenever live code, IDE output, diagram, or board notes appear on screen.
-- At least 60% of slides should have a visual. With table/cards/steps/tree/compare use NO bullets (use footer instead).
+- Create ${perChunk} crisp slides in strict chronological order.
+- Zero hallucination: every term, number, formula, and code line must come from the lecture.
+- Set "needs_screenshot": true + clear "screenshot_hint" whenever live code, IDE output, diagram, chart, or board notes appear on screen.
+- At least 60% of slides must have a visual. With table/cards/steps/tree/compare use NO bullets (use footer instead).
 - Output language: ${lang}.
-- Also return "takeaways": 2 key takeaways, and "quiz": 1-2 questions [{"q":"...","a":"..."}].${coverRule}
+- Return "takeaways": 2 key takeaways, and "quiz": 1-2 factual questions [{"q":"...","a":"..."}].${coverRule}
 - Return ONLY valid JSON: {"slides": [...], "takeaways": ["..."], "quiz": [{"q":"...","a":"..."}]${coverTail}}`;
 }
 
@@ -63,9 +63,11 @@ function parseJsonSafe(raw) {
   s = s.replace(/^```(?:json)?/i, "").replace(/```$/i, "").trim();
   const a = s.indexOf("{");
   const b = s.lastIndexOf("}");
-  if (a === -1 || b === -1) throw new Error("AI did not return valid JSON.");
+  if (a === -1 || b === -1) throw new Error("AI returned invalid JSON.");
   return JSON.parse(s.slice(a, b + 1));
 }
+
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 exports.handler = async (event) => {
   if (event.httpMethod !== "POST") {
@@ -99,20 +101,16 @@ exports.handler = async (event) => {
 
   const ai = new GoogleGenAI({ apiKey });
   const model = (process.env.GEMINI_MODEL || "gemini-3.8-flash").trim();
-
   const systemInstruction = buildSystemPrompt(lang, perChunk, isFirst, videoMode);
-  let contents;
 
+  let contents;
   if (videoMode && body.video_id) {
     const startSec = Math.max(0, Math.floor(Number(body.start_sec || 0)));
-    const endSec = Math.max(startSec + 30, Math.floor(Number(body.end_sec || 300)));
-    const startMin = Math.floor(startSec / 60);
-    const endMin = Math.floor(endSec / 60);
+    const endSec = Math.max(startSec + 30, Math.floor(Number(body.end_sec || 180)));
+    const fmt = (s) => `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`;
     contents = [
-      {
-        fileData: { fileUri: `https://www.youtube.com/watch?v=${body.video_id}` }
-      },
-      `Section ${idx}/${total}: Focus ONLY on minute ${startMin}:00 to ${endMin}:00 of this video. Extract exact concepts & on-screen code/diagrams.`
+      { fileData: { fileUri: `https://www.youtube.com/watch?v=${body.video_id}` } },
+      `Section ${idx}/${total}: Analyze ONLY minute ${fmt(startSec)} to ${fmt(endSec)} of this video. Extract exact concepts & on-screen code/diagrams.`
     ];
   } else {
     const chunkText = String(body.chunk_text || "").trim();
@@ -122,34 +120,48 @@ exports.handler = async (event) => {
     contents = `Section ${idx}/${total} (${body.time_range || ""}):\n\n${chunkText}`;
   }
 
-  try {
-    const response = await ai.models.generateContent({
-      model,
-      contents,
-      config: {
-        systemInstruction,
-        responseMimeType: "application/json",
-        temperature: 0.2
+  let lastErr = null;
+  for (let attempt = 1; attempt <= 2; attempt++) {
+    try {
+      const response = await ai.models.generateContent({
+        model,
+        contents,
+        config: {
+          systemInstruction,
+          responseMimeType: "application/json",
+          temperature: 0.2
+        }
+      });
+      const parsed = parseJsonSafe(response.text);
+      return {
+        statusCode: 200,
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(parsed)
+      };
+    } catch (err) {
+      lastErr = err;
+      const m = (err && err.message) ? err.message : "";
+      if (/503|overloaded|unavailable/i.test(m) && attempt === 1) {
+        await sleep(1800);
+        continue;
       }
-    });
-    const parsed = parseJsonSafe(response.text);
-    return {
-      statusCode: 200,
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(parsed)
-    };
-  } catch (err) {
-    const msg = (err && err.message) ? err.message : "AI generation failed.";
-    let friendly = `AI Error: ${msg.slice(0, 180)}`;
-    if (/429|quota|resource_exhausted/i.test(msg)) {
-      friendly = "Free Gemini rate limit reached. Wait 30 seconds and try again.";
-    } else if (/api_key|permission_denied|unauthenticated/i.test(msg)) {
-      friendly = "Invalid GEMINI_API_KEY in Netlify Environment Variables.";
+      break;
     }
-    return {
-      statusCode: 500,
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ detail: friendly })
-    };
   }
+
+  const msg = (lastErr && lastErr.message) ? lastErr.message : "AI generation failed.";
+  let friendly = `AI Error: ${msg.slice(0, 180)}`;
+  if (/503|overloaded|unavailable/i.test(msg)) {
+    friendly = "Google Gemini servers are temporarily busy (503). Wait 15 seconds and click Generate again.";
+  } else if (/429|quota|resource_exhausted/i.test(msg)) {
+    friendly = "Free Gemini rate limit reached. Wait 30 seconds and try again.";
+  } else if (/api_key|permission_denied|unauthenticated/i.test(msg)) {
+    friendly = "Invalid GEMINI_API_KEY in Netlify Environment Variables.";
+  }
+
+  return {
+    statusCode: 500,
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ detail: friendly })
+  };
 };

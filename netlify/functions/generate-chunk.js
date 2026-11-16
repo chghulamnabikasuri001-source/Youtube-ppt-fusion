@@ -104,8 +104,8 @@ exports.handler = async (event) => {
   const total = Number(body.total || 1);
 
   const ai = new GoogleGenAI({ apiKey });
-  const primaryModel = (process.env.GEMINI_MODEL || "gemini-2.5-flash").trim();
-  const models = [primaryModel, "gemini-2.0-flash"].filter((v, i, a) => a.indexOf(v) === i);
+  const primaryModel = (process.env.GEMINI_MODEL || "gemini-3.8-flash").trim();
+  const models = [primaryModel, "gemini-2.5-flash"].filter((v, i, a) => a.indexOf(v) === i);
 
   const systemInstruction = buildSystemPrompt(lang, perChunk, isFirst, videoMode);
   let contents;

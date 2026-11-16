@@ -1,5 +1,5 @@
 /**
- * Native PptxGenJS Slide Builder with Sleek Visuals + Smart Screenshot Drop-Zone Placeholders
+ * Native PptxGenJS Slide Builder with Sleek Visuals + Clickable Timestamp Screenshot Drop-Zones
  */
 const THEMES = {
   "Classroom": {
@@ -48,6 +48,14 @@ function textOn(T, fillHex) {
   return lum(fillHex) > 0.55 ? T.ink : T.on_dark;
 }
 
+function tsToSeconds(ts) {
+  const parts = String(ts || "").trim().split(":").map((n) => parseInt(n, 10));
+  if (parts.some(isNaN)) return 0;
+  if (parts.length === 3) return parts[0] * 3600 + parts[1] * 60 + parts[2];
+  if (parts.length === 2) return parts[0] * 60 + parts[1];
+  return 0;
+}
+
 function parseBoldRuns(text, baseOpts) {
   const parts = String(text || "").split(/(\*\*.+?\*\*)/g).filter(Boolean);
   if (!parts.length) return [{ text: "", options: baseOpts }];
@@ -82,7 +90,6 @@ function mx(ctx, x, w) {
 function newStyledSlide(pptx, ctx) {
   const slide = pptx.addSlide();
   slide.background = { color: ctx.bg };
-  // Sleek top accent bar
   slide.addShape(pptx.ShapeType.rect, {
     x: 0, y: 0, w: W, h: 0.08,
     fill: { color: ctx.T.acc[0] },
@@ -130,11 +137,12 @@ function addFooter(pptx, slide, ctx, text) {
   });
 }
 
-function addPageNo(slide, ctx, idx, total) {
-  slide.addText(`${idx} / ${total}`, {
-    x: ctx.rtl ? 0.3 : W - 1.5,
+function addPageAndTs(slide, ctx, idx, total, timestamp) {
+  const label = timestamp ? `⏱ ${timestamp}   |   ${idx} / ${total}` : `${idx} / ${total}`;
+  slide.addText(label, {
+    x: ctx.rtl ? 0.3 : W - 2.6,
     y: 7.08,
-    w: 1.2,
+    w: 2.3,
     h: 0.28,
     fontFace: ctx.bodyFont,
     fontSize: 10,
@@ -143,12 +151,7 @@ function addPageNo(slide, ctx, idx, total) {
   });
 }
 
-/**
- * Draws a sleek dashed Screenshot Drop-Zone placeholder box on the slide
- * so the user knows exact timestamp & what screenshot to paste there!
- */
-function drawScreenshotPlaceholder(pptx, slide, ctx, hint, timestamp, x, y, w, h) {
-  // Outer card background
+function drawScreenshotPlaceholder(pptx, slide, ctx, hint, timestamp, videoId, x, y, w, h) {
   slide.addShape(pptx.ShapeType.roundRect, {
     x, y, w, h,
     fill: { color: ctx.surface },
@@ -156,35 +159,39 @@ function drawScreenshotPlaceholder(pptx, slide, ctx, hint, timestamp, x, y, w, h
     rectRadius: 0.12
   });
 
-  // Top timestamp pill
-  const badgeW = 2.1;
+  const badgeW = 2.4;
+  const sec = tsToSeconds(timestamp);
+  const ytLink = videoId ? `https://www.youtube.com/watch?v=${videoId}&t=${sec}s` : null;
+
   slide.addShape(pptx.ShapeType.roundRect, {
     x: x + (w - badgeW) / 2,
-    y: y + h * 0.22,
+    y: y + h * 0.20,
     w: badgeW,
-    h: 0.42,
+    h: 0.44,
     fill: { color: ctx.T.acc[1] },
     line: { type: "none" },
     rectRadius: 0.2
   });
-  slide.addText(`📸  ${timestamp || "VIDEO FRAME"}`, {
+
+  const badgeOpts = {
     x: x + (w - badgeW) / 2,
-    y: y + h * 0.22,
+    y: y + h * 0.20,
     w: badgeW,
-    h: 0.42,
+    h: 0.44,
     fontFace: ctx.headFont,
     fontSize: 12,
     bold: true,
     color: textOn(ctx.T, ctx.T.acc[1]),
     align: "center",
     valign: "middle"
-  });
+  };
+  if (ytLink) badgeOpts.hyperlink = { url: ytLink, tooltip: "Jump to exact moment on YouTube" };
+  slide.addText(`📸  ${timestamp || "VIDEO FRAME"} ↗`, badgeOpts);
 
-  // Main instruction text
   const label = hint || "Paste Screenshot from Video Here";
   slide.addText(label, {
     x: x + 0.35,
-    y: y + h * 0.38,
+    y: y + h * 0.36,
     w: w - 0.7,
     h: 0.95,
     fontFace: ctx.headFont,
@@ -195,23 +202,19 @@ function drawScreenshotPlaceholder(pptx, slide, ctx, hint, timestamp, x, y, w, h
     valign: "middle"
   });
 
-  // Helper caption
-  slide.addText("Drag & drop or paste (Ctrl+V) your video frame inside this box", {
+  slide.addText("Click the timestamp pill above to open video frame, then paste (Ctrl+V) here", {
     x: x + 0.35,
-    y: y + h * 0.62,
+    y: y + h * 0.60,
     w: w - 0.7,
-    h: 0.55,
+    h: 0.6,
     fontFace: ctx.bodyFont,
-    fontSize: 12,
+    fontSize: 11.5,
     color: ctx.T.muted,
     align: "center",
     valign: "top"
   });
 }
 
-// ----------------------------------------------------------------------
-// Visual Renderers
-// ----------------------------------------------------------------------
 function drawNested(pptx, slide, ctx, items, x, y, w, h) {
   const list = items.slice(0, 4);
   const n = list.length;
@@ -263,9 +266,7 @@ function drawFlow(pptx, slide, ctx, items, x, y, w, h, direction = "vertical") {
       const fill = ctx.pal[i % 4];
       slide.addShape(pptx.ShapeType.roundRect, {
         x: bx, y: y0, w: bw, h: bh,
-        fill: { color: fill },
-        line: { type: "none" },
-        rectRadius: 0.12
+        fill: { color: fill }, line: { type: "none" }, rectRadius: 0.12
       });
       slide.addText(txt, {
         x: bx + 0.08, y: y0 + 0.06, w: bw - 0.16, h: bh - 0.12,
@@ -291,9 +292,7 @@ function drawFlow(pptx, slide, ctx, items, x, y, w, h, direction = "vertical") {
       const fill = ctx.pal[i % 4];
       slide.addShape(pptx.ShapeType.roundRect, {
         x: x0, y: by, w: bw, h: bh,
-        fill: { color: fill },
-        line: { type: "none" },
-        rectRadius: 0.14
+        fill: { color: fill }, line: { type: "none" }, rectRadius: 0.14
       });
       slide.addText(txt, {
         x: x0 + 0.12, y: by + 0.05, w: bw - 0.24, h: bh - 0.1,
@@ -412,13 +411,8 @@ function drawTable(pptx, slide, ctx, vis, x, y, w, h) {
     headers.map((hd) => ({
       text: String(hd || ""),
       options: {
-        fill: { color: headerFill },
-        color: headerColor,
-        bold: true,
-        fontFace: ctx.headFont,
-        fontSize: 15,
-        align: ctx.rtl ? "right" : "left",
-        valign: "middle"
+        fill: { color: headerFill }, color: headerColor, bold: true,
+        fontFace: ctx.headFont, fontSize: 15, align: ctx.rtl ? "right" : "left", valign: "middle"
       }
     })),
     ...rows.map((r, rIdx) =>
@@ -426,12 +420,8 @@ function drawTable(pptx, slide, ctx, vis, x, y, w, h) {
         text: String((r && r[cIdx]) || ""),
         options: {
           fill: { color: rIdx % 2 === 0 ? ctx.surface : (ctx.dark ? ctx.T.dark : "EEF2F6") },
-          color: ctx.text,
-          bold: cIdx === 0,
-          fontFace: ctx.bodyFont,
-          fontSize: 14,
-          align: ctx.rtl ? "right" : "left",
-          valign: "middle"
+          color: ctx.text, bold: cIdx === 0, fontFace: ctx.bodyFont, fontSize: 14,
+          align: ctx.rtl ? "right" : "left", valign: "middle"
         }
       }))
     )
@@ -439,10 +429,7 @@ function drawTable(pptx, slide, ctx, vis, x, y, w, h) {
 
   const rowH = Math.min(0.75, h / tableRows.length);
   slide.addTable(tableRows, {
-    x,
-    y: y + Math.max(0, (h - rowH * tableRows.length) / 2),
-    w,
-    rowH,
+    x, y: y + Math.max(0, (h - rowH * tableRows.length) / 2), w, rowH,
     border: { pt: 1, color: ctx.line }
   });
 }
@@ -671,16 +658,13 @@ function drawRows(pptx, slide, ctx, items, x, y, w, h, numbered = true) {
   });
 }
 
-// ----------------------------------------------------------------------
-// Main Deck Export Function
-// ----------------------------------------------------------------------
 async function generateAndDownloadPptx(deck) {
   const T = THEMES[deck.themeName] || THEMES["Classroom"];
   const rtl = Boolean(deck.rtl);
   const wantPlaceholders = Boolean(deck.wantPlaceholders);
 
   const pptx = new PptxGenJS();
-  pptx.layout = "LAYOUT_WIDE"; // 13.333 x 7.5 inches
+  pptx.layout = "LAYOUT_WIDE";
   pptx.title = deck.title;
 
   // 1. Title Slide
@@ -741,19 +725,16 @@ async function generateAndDownloadPptx(deck) {
     const vtype = hasVis ? String(s.visual.type).toLowerCase() : null;
 
     if (!hasVis && !hasShotSlot) {
-      // Pure designed bullet rows
       addHeaderWithPill(pptx, slide, ctx, s.heading, 0.7, 0.4, 11.93, 1.05, 28);
       const rows = bullets.length ? bullets.map((b) => [b, null]) : [[s.heading, null]];
       drawRows(pptx, slide, ctx, rows, 0.7, 1.75, 11.93, 4.5, false);
     } else if (hasVis && hasShotSlot) {
-      // Slide has BOTH a diagram AND needs a screenshot -> Left: Diagram/Bullets, Right: Screenshot Drop-Zone!
       addHeaderWithPill(pptx, slide, ctx, s.heading, 0.7, 0.4, 11.93, 1.0, 26);
       const leftX = mx(ctx, 0.7, 5.75);
       const rightX = mx(ctx, 6.8, 5.83);
       drawVisual(pptx, slide, ctx, s.visual, leftX, 1.65, 5.75, 4.55);
-      drawScreenshotPlaceholder(pptx, slide, ctx, s.screenshot_hint, s.timestamp, rightX, 1.65, 5.83, 4.55);
+      drawScreenshotPlaceholder(pptx, slide, ctx, s.screenshot_hint, s.timestamp, deck.videoId, rightX, 1.65, 5.83, 4.55);
     } else if (hasShotSlot && !hasVis) {
-      // Slide needs a screenshot -> Left: Heading + Bullets, Right: Clean Screenshot Drop-Zone!
       const colW = 5.65;
       const boxW = 5.95;
       const tx = mx(ctx, 0.7, colW);
@@ -762,11 +743,7 @@ async function generateAndDownloadPptx(deck) {
       addHeaderWithPill(pptx, slide, ctx, s.heading, tx, 0.65, colW, 1.05, 25);
       const bulletObjs = bullets.flatMap((b) =>
         parseBoldRuns(b, {
-          fontFace: ctx.bodyFont,
-          fontSize: 16,
-          color: ctx.text,
-          bullet: true,
-          breakLine: true
+          fontFace: ctx.bodyFont, fontSize: 16, color: ctx.text, bullet: true, breakLine: true
         })
       );
       if (bulletObjs.length) {
@@ -775,9 +752,8 @@ async function generateAndDownloadPptx(deck) {
           align: rtl ? "right" : "left", valign: "top", rtlMode: rtl
         });
       }
-      drawScreenshotPlaceholder(pptx, slide, ctx, s.screenshot_hint, s.timestamp, bx, 0.9, boxW, 5.25);
+      drawScreenshotPlaceholder(pptx, slide, ctx, s.screenshot_hint, s.timestamp, deck.videoId, bx, 0.9, boxW, 5.25);
     } else {
-      // Standard Visual Slide
       const isFull = fullTypes.has(vtype) || bullets.length === 0;
       if (isFull) {
         addHeaderWithPill(pptx, slide, ctx, s.heading, 0.7, 0.4, 11.93, 1.05, 28);
@@ -792,11 +768,7 @@ async function generateAndDownloadPptx(deck) {
         addHeaderWithPill(pptx, slide, ctx, s.heading, tx, 0.65, colW, 1.05, 25);
         const bulletObjs = bullets.flatMap((b) =>
           parseBoldRuns(b, {
-            fontFace: ctx.bodyFont,
-            fontSize: 16,
-            color: ctx.text,
-            bullet: true,
-            breakLine: true
+            fontFace: ctx.bodyFont, fontSize: 16, color: ctx.text, bullet: true, breakLine: true
           })
         );
         slide.addText(bulletObjs, {
@@ -809,7 +781,7 @@ async function generateAndDownloadPptx(deck) {
     }
 
     addFooter(pptx, slide, ctx, s.footer);
-    addPageNo(slide, ctx, slideNum, total);
+    addPageAndTs(slide, ctx, slideNum, total, s.timestamp);
 
     if (s.notes) {
       slide.addNotes(s.notes);

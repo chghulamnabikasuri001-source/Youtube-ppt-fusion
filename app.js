@@ -22,6 +22,26 @@ function renderSwatches(themeName) {
   $("swatch-label").textContent = `${themeName} palette`;
 }
 
+async function safeFetchJson(url, options) {
+  const res = await fetch(url, options);
+  const raw = await res.text();
+  let data;
+  try {
+    data = JSON.parse(raw);
+  } catch {
+    if (res.status === 502 || res.status === 504 || raw.trim().startsWith("<")) {
+      throw new Error(
+        "Server timed out because this video has no captions and was too heavy to watch directly. Tip: Open YouTube → click 'Show transcript' → paste it in the manual box above!"
+      );
+    }
+    throw new Error(`Unexpected server response (${res.status}).`);
+  }
+  if (!res.ok) {
+    throw new Error(data.detail || `Request failed (${res.status}).`);
+  }
+  return data;
+}
+
 function parseManualTranscript(text) {
   const tsRegex = /^(?:(\d{1,2}):)?(\d{1,2}):(\d{2})$/;
   const snips = [];
@@ -48,7 +68,7 @@ function parseManualTranscript(text) {
   return snips;
 }
 
-function splitChunks(snips, maxCharsPerChunk = 7500, maxTotalChars = 150000) {
+function splitChunks(snips, maxCharsPerChunk = 5000, maxTotalChars = 150000) {
   const chunks = [];
   let cur = [];
   let n = 0;
@@ -150,6 +170,8 @@ $("clear-history").addEventListener("click", () => {
 
 $("download-btn").addEventListener("click", async () => {
   if (!latestDeck) return;
+  latestDeck.themeName = $("theme-select").value;
+  latestDeck.wantPlaceholders = $("want-placeholders").checked;
   await generateAndDownloadPptx(latestDeck);
 });
 
@@ -193,19 +215,17 @@ $("generate-form").addEventListener("submit", async (e) => {
 
   try {
     setProgress(8, "Reading video details & fetching transcript...", "Step 1 of 3 · Fetching Lecture");
-    const trRes = await fetch("/.netlify/functions/transcript", {
+    const trData = await safeFetchJson("/.netlify/functions/transcript", {
       method: "POST",
       headers,
       body: JSON.stringify({ url })
     });
-    const trData = await trRes.json();
-    if (!trRes.ok) throw new Error(trData.detail || "Could not read video details.");
 
     const notes = [];
     let snips = [];
     let videoMode = false;
 
-    if (manualText.length >= 200) {
+    if (manualText.length >= 100) {
       snips = parseManualTranscript(manualText);
     } else if (trData.transcript_available && trData.snippets.length > 0) {
       snips = trData.snippets;
@@ -227,7 +247,7 @@ $("generate-form").addEventListener("submit", async (e) => {
           `Designing exact slides for section ${i + 1} of ${chunks.length}...`,
           "Step 2 of 3 · AI Structuring Slides"
         );
-        const chRes = await fetch("/.netlify/functions/generate-chunk", {
+        const chData = await safeFetchJson("/.netlify/functions/generate-chunk", {
           method: "POST",
           headers,
           body: JSON.stringify({
@@ -241,13 +261,11 @@ $("generate-form").addEventListener("submit", async (e) => {
             video_mode: false
           })
         });
-        const chData = await chRes.json();
-        if (!chRes.ok) throw new Error(chData.detail || `Failed on section ${i + 1}`);
         parts.push(chData);
       }
     } else {
-      // Direct multimodal video mode (first 24 minutes in 3 x 8-min segments)
-      const segments = [[0, 480], [480, 960], [960, 1440]];
+      // Fast 3-minute micro-segments so Netlify never hits 10s timeout
+      const segments = [[0, 180], [180, 360], [360, 540], [540, 720]];
       for (let i = 0; i < segments.length; i++) {
         const pct = Math.round(20 + (65 * i) / segments.length);
         setProgress(
@@ -255,32 +273,31 @@ $("generate-form").addEventListener("submit", async (e) => {
           `Watching video segment ${i + 1} of ${segments.length}...`,
           "Step 2 of 3 · AI Watching Video"
         );
-        const segRes = await fetch("/.netlify/functions/generate-chunk", {
-          method: "POST",
-          headers,
-          body: JSON.stringify({
-            video_id: trData.video_id,
-            start_sec: segments[i][0],
-            end_sec: segments[i][1],
-            idx: i + 1,
-            total: segments.length,
-            is_first: i === 0,
-            lang_label: langLabel,
-            detail_label: detailLabel,
-            video_mode: true
-          })
-        });
-        const segData = await segRes.json();
-        if (!segRes.ok) {
+        try {
+          const segData = await safeFetchJson("/.netlify/functions/generate-chunk", {
+            method: "POST",
+            headers,
+            body: JSON.stringify({
+              video_id: trData.video_id,
+              start_sec: segments[i][0],
+              end_sec: segments[i][1],
+              idx: i + 1,
+              total: segments.length,
+              is_first: i === 0,
+              lang_label: langLabel,
+              detail_label: detailLabel,
+              video_mode: true
+            })
+          });
+          if (!segData.slides || !segData.slides.length) break;
+          parts.push(segData);
+        } catch (segErr) {
           if (parts.length > 0) break;
-          throw new Error(segData.detail || "Could not process video directly.");
+          throw segErr;
         }
-        if (!segData.slides || !segData.slides.length) break;
-        parts.push(segData);
       }
     }
 
-    // Merge all parts
     const allSlides = [];
     const allTakeaways = [];
     const allQuiz = [];
@@ -311,13 +328,14 @@ $("generate-form").addEventListener("submit", async (e) => {
 
     const shotSlotsCount = wantPlaceholders ? allSlides.filter((s) => s.needs_screenshot).length : 0;
     if (shotSlotsCount > 0) {
-      notes.push(`Reserved ${shotSlotsCount} dashed screenshot drop-zone(s) with timestamps where code or board diagrams appear.`);
+      notes.push(`Reserved ${shotSlotsCount} clickable screenshot drop-zone(s) with timestamps where code or board diagrams appear.`);
     }
 
     setProgress(95, "Building & downloading your PowerPoint deck...", "Step 3 of 3 · Compiling .PPTX");
 
     const cleanTitle = (trData.title || "Lecture").slice(0, 80);
     latestDeck = {
+      videoId: trData.video_id,
       title: cleanTitle,
       tagline,
       channel: trData.channel,
@@ -330,7 +348,6 @@ $("generate-form").addEventListener("submit", async (e) => {
       wantPlaceholders
     };
 
-    // Show result card & auto-trigger download
     $("progress-card").classList.add("hidden");
     $("result-card").classList.remove("hidden");
     $("result-title").textContent = cleanTitle;

@@ -17,7 +17,7 @@ const SCHEMA_HELP = `
 Each slide is a JSON object:
 {
  "heading": "short, exact topic title from the lecture (max 8 words)",
- "bullets": ["0-4 SHORT, factual lines (max 12 words each). Use **bold** for exact terms/formulas, e.g. \"**Bayes Theorem**: P(A|B) = P(B|A)P(A)/P(B)\""],
+ "bullets": ["0-4 SHORT, factual lines (max 12 words each). Use **bold** for exact terms/formulas, e.g. \\"**Bayes Theorem**: P(A|B) = P(B|A)P(A)/P(B)\\""],
  "visual": null OR exactly one of:
    {"type":"nested","items":["Outer set","Middle set","Inner set"]}                 // sets inside sets, 2-4 items, outermost first
    {"type":"flow","items":["Step 1","Step 2","Step 3"],"direction":"vertical"}      // exact process, pipeline, cause->effect (2-6 items)
@@ -26,7 +26,7 @@ Each slide is a JSON object:
    {"type":"table","headers":["Criteria","Option A","Option B"],"rows":[["Feature","x","y"]]} // comparison table, max 6 rows, max 4 cols
    {"type":"tree","root":{"label":"Topic","children":[{"label":"Part","children":[{"label":"Sub-part"}]}]}}  // hierarchy/taxonomy, max 3 levels
    {"type":"network","layers":[4,6,6,2],"labels":["Input","Hidden layers","Output"]}  // ONLY when neural network layers are discussed
-   {"type":"code","language":"python","code":"line1\nline2"}                          // exact code/commands explained (max 12 lines)
+   {"type":"code","language":"python","code":"line1\\nline2"}                          // exact code/commands explained (max 12 lines)
    {"type":"compare","left":{"title":"A","points":["..."]},"right":{"title":"B","points":["..."]}}   // two-sided contrast
  "footer": "optional one-line key formula, rule, or takeaway from the lecture",
  "notes": "speaker notes: 3-6 sentences with the EXACT explanation, numbers, formulas, and examples the teacher gave",
@@ -113,12 +113,13 @@ exports.handler = async (event) => {
   if (videoMode && body.video_id) {
     const startSec = Math.max(0, Math.floor(Number(body.start_sec || 0)));
     const endSec = Math.max(startSec + 30, Math.floor(Number(body.end_sec || 480)));
+    const startMin = Math.floor(startSec / 60);
+    const endMin = Math.floor(endSec / 60);
     contents = [
       {
-        fileData: { fileUri: `https://www.youtube.com/watch?v=${body.video_id}` },
-        videoMetadata: { startOffset: `${startSec}s`, endOffset: `${endSec}s` }
+        fileData: { fileUri: `https://www.youtube.com/watch?v=${body.video_id}` }
       },
-      `This is segment ${idx} of ${total} of the lecture. Watch and listen carefully to extract exact spoken concepts AND on-screen code/diagrams.`
+      `This is segment ${idx} of ${total} of the lecture. Focus ONLY on the portion of the video from minute ${startMin}:00 to ${endMin}:00. Watch and listen carefully to extract exact spoken concepts AND on-screen code/diagrams.`
     ];
   } else {
     const chunkText = String(body.chunk_text || "").trim();

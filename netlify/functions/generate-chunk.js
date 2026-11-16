@@ -8,59 +8,53 @@ const LANGS = {
 };
 
 const DETAIL = {
-  "Brief": "4-5",
-  "Standard": "6-8",
-  "Detailed": "9-12"
+  "Brief": "3-4",
+  "Standard": "5-6",
+  "Detailed": "7-9"
 };
 
 const SCHEMA_HELP = `
 Each slide is a JSON object:
 {
  "heading": "short, exact topic title from the lecture (max 8 words)",
- "bullets": ["0-4 SHORT, factual lines (max 12 words each). Use **bold** for exact terms/formulas, e.g. \\"**Bayes Theorem**: P(A|B) = P(B|A)P(A)/P(B)\\""],
- "visual": null OR exactly one of:
-   {"type":"nested","items":["Outer set","Middle set","Inner set"]}                 // sets inside sets, 2-4 items, outermost first
-   {"type":"flow","items":["Step 1","Step 2","Step 3"],"direction":"vertical"}      // exact process, pipeline, cause->effect (2-6 items)
-   {"type":"cards","items":[{"icon":"📌","title":"Exact term","text":"Exact short definition or example"}]}   // 2-4 categories/examples
-   {"type":"steps","items":[{"title":"Step 1","text":"Exact action"}]}              // ordered stages (2-5)
-   {"type":"table","headers":["Criteria","Option A","Option B"],"rows":[["Feature","x","y"]]} // comparison table, max 6 rows, max 4 cols
-   {"type":"tree","root":{"label":"Topic","children":[{"label":"Part","children":[{"label":"Sub-part"}]}]}}  // hierarchy/taxonomy, max 3 levels
-   {"type":"network","layers":[4,6,6,2],"labels":["Input","Hidden layers","Output"]}  // ONLY when neural network layers are discussed
-   {"type":"code","language":"python","code":"line1\\nline2"}                          // exact code/commands explained (max 12 lines)
-   {"type":"compare","left":{"title":"A","points":["..."]},"right":{"title":"B","points":["..."]}}   // two-sided contrast
- "footer": "optional one-line key formula, rule, or takeaway from the lecture",
- "notes": "speaker notes: 3-6 sentences with the EXACT explanation, numbers, formulas, and examples the teacher gave",
- "timestamp": "MM:SS",  // exact [MM:SS] timestamp from the transcript where this topic starts
- "needs_screenshot": true or false, // true ONLY when the teacher is showing code, a whiteboard diagram, complex equation, or important visual on screen that the user should paste a screenshot of
- "screenshot_hint": "short 4-8 word label of what screenshot to paste here, e.g. 'Paste Python loop output from 04:15'"
+ "bullets": ["0-3 SHORT, factual lines (max 12 words each). Use **bold** for exact terms/formulas"],
+ "visual": null OR one of:
+   {"type":"nested","items":["Outer set","Middle set","Inner set"]}
+   {"type":"flow","items":["Step 1","Step 2","Step 3"],"direction":"vertical"}
+   {"type":"cards","items":[{"icon":"📌","title":"Exact term","text":"Short definition"}]}
+   {"type":"steps","items":[{"title":"Step 1","text":"Exact action"}]}
+   {"type":"table","headers":["Criteria","A","B"],"rows":[["Feature","x","y"]]}
+   {"type":"tree","root":{"label":"Topic","children":[{"label":"Part","children":[{"label":"Sub"}]}]}}
+   {"type":"network","layers":[4,6,6,2],"labels":["Input","Hidden","Output"]}
+   {"type":"code","language":"python","code":"line1\\nline2"}
+   {"type":"compare","left":{"title":"A","points":["..."]},"right":{"title":"B","points":["..."]}}
+ "footer": "optional one-line key formula or rule",
+ "notes": "2-4 sentences speaker notes with exact explanation and examples",
+ "timestamp": "MM:SS",
+ "needs_screenshot": true or false,
+ "screenshot_hint": "short 4-7 word label of what screenshot to paste here"
 }
 `;
 
 function buildSystemPrompt(lang, perChunk, isFirst, videoMode) {
   const src = videoMode
-    ? "a segment of a lecture VIDEO (extract BOTH spoken explanations AND exact text, formulas, diagrams, and code shown on screen)"
-    : "one timestamped section of a lecture TRANSCRIPT (fix speech-to-text spelling errors on technical terms silently)";
+    ? "a segment of a lecture VIDEO (extract spoken concepts + code/diagrams shown on screen)"
+    : "one timestamped section of a lecture TRANSCRIPT";
 
   const coverRule = isFirst
-    ? `\n- Because this is the FIRST section, also return "tagline" (short subtitle, max 6 words) and "cover" (one visual object of type nested, flow, tree, or network representing the main lecture topic).`
+    ? `\n- Because this is the FIRST section, also return "tagline" (max 6 words) and "cover" (nested, flow, tree, or network visual).`
     : "";
   const coverTail = isFirst ? `, "tagline": "...", "cover": {...}` : "";
 
-  return `You are an expert academic assistant and presentation designer. You receive ${src}.
-Your #1 priority is **100% FACTUAL ACCURACY** to what is actually taught in the video.
-
+  return `You are an expert presentation designer receiving ${src}. Be 100% factually accurate to the lecture.
 ${SCHEMA_HELP}
-Strict Rules:
-- Create about ${perChunk} slides in strict chronological order matching the video timestamps.
-- **NO HALLUCINATION / NO FLUFF**: Every heading, bullet, table cell, diagram label, and code snippet MUST come directly from the teacher's actual words, numbers, formulas, and examples. Never invent generic filler points.
-- Preserve exact technical terms, variable names, equations, numbers, and real examples mentioned by the teacher.
-- Keep slide text crisp (max 12 words per bullet), and put the full detailed explanation + worked examples in "notes".
-- **SCREENSHOT PLACEHOLDER RULE**: If the teacher is demonstrating live code, IDE output, a diagram, chart, or important board notes on screen at that timestamp, set "needs_screenshot": true and write a clear "screenshot_hint" (with the timestamp). If a slide has BOTH a diagram ("visual") AND "needs_screenshot": true, keep both so the builder can reserve a clean screenshot slot!
-- At least 65% of slides should have a visual that models the concept explained in that moment. Vary visual types naturally.
-- With table / cards / steps / tree / compare use NO bullets and use "footer" instead. With nested / flow / network / code use 2-3 bullets.
-- Skip intros, sponsor reads, greetings, and "like & subscribe" chatter.
-- Output language for all text: ${lang}. (Keep code syntax and standard technical symbols accurate).
-- Also return "takeaways": 2-3 exact key takeaways from this section, and "quiz": 1-2 factual questions [{"q":"...","a":"..."}] based strictly on this section.${coverRule}
+Rules:
+- Create ${perChunk} crisp slides in chronological order.
+- Never invent generic filler; use exact terms, formulas, and examples from the lecture.
+- Set "needs_screenshot": true with a clear "screenshot_hint" whenever live code, IDE output, diagram, or board notes appear on screen.
+- At least 60% of slides should have a visual. With table/cards/steps/tree/compare use NO bullets (use footer instead).
+- Output language: ${lang}.
+- Also return "takeaways": 2 key takeaways, and "quiz": 1-2 questions [{"q":"...","a":"..."}].${coverRule}
 - Return ONLY valid JSON: {"slides": [...], "takeaways": ["..."], "quiz": [{"q":"...","a":"..."}]${coverTail}}`;
 }
 
@@ -97,72 +91,65 @@ exports.handler = async (event) => {
   }
 
   const lang = LANGS[body.lang_label] || "English";
-  const perChunk = DETAIL[body.detail_label] || "6-8";
+  const perChunk = DETAIL[body.detail_label] || "5-6";
   const isFirst = Boolean(body.is_first);
   const videoMode = Boolean(body.video_mode);
   const idx = Number(body.idx || 1);
   const total = Number(body.total || 1);
 
   const ai = new GoogleGenAI({ apiKey });
-  const primaryModel = (process.env.GEMINI_MODEL || "gemini-3.8-flash").trim();
-  const models = [primaryModel, "gemini-2.5-flash"].filter((v, i, a) => a.indexOf(v) === i);
+  const model = (process.env.GEMINI_MODEL || "gemini-2.5-flash").trim();
 
   const systemInstruction = buildSystemPrompt(lang, perChunk, isFirst, videoMode);
   let contents;
 
   if (videoMode && body.video_id) {
     const startSec = Math.max(0, Math.floor(Number(body.start_sec || 0)));
-    const endSec = Math.max(startSec + 30, Math.floor(Number(body.end_sec || 480)));
+    const endSec = Math.max(startSec + 30, Math.floor(Number(body.end_sec || 300)));
     const startMin = Math.floor(startSec / 60);
     const endMin = Math.floor(endSec / 60);
     contents = [
       {
         fileData: { fileUri: `https://www.youtube.com/watch?v=${body.video_id}` }
       },
-      `This is segment ${idx} of ${total} of the lecture. Focus ONLY on the portion of the video from minute ${startMin}:00 to ${endMin}:00. Watch and listen carefully to extract exact spoken concepts AND on-screen code/diagrams.`
+      `Section ${idx}/${total}: Focus ONLY on minute ${startMin}:00 to ${endMin}:00 of this video. Extract exact concepts & on-screen code/diagrams.`
     ];
   } else {
     const chunkText = String(body.chunk_text || "").trim();
     if (!chunkText) {
       return { statusCode: 400, body: JSON.stringify({ detail: "Empty transcript chunk." }) };
     }
-    contents = `This is section ${idx} of ${total} of the lecture (${body.time_range || ""}).\nExtract the EXACT concepts, formulas, code, and examples taught here:\n\n${chunkText}`;
+    contents = `Section ${idx}/${total} (${body.time_range || ""}):\n\n${chunkText}`;
   }
 
-  let lastErr = null;
-  for (const model of models) {
-    try {
-      const response = await ai.models.generateContent({
-        model,
-        contents,
-        config: {
-          systemInstruction,
-          responseMimeType: "application/json",
-          temperature: 0.2
-        }
-      });
-      const parsed = parseJsonSafe(response.text);
-      return {
-        statusCode: 200,
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(parsed)
-      };
-    } catch (err) {
-      lastErr = err;
+  try {
+    const response = await ai.models.generateContent({
+      model,
+      contents,
+      config: {
+        systemInstruction,
+        responseMimeType: "application/json",
+        temperature: 0.2
+      }
+    });
+    const parsed = parseJsonSafe(response.text);
+    return {
+      statusCode: 200,
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(parsed)
+    };
+  } catch (err) {
+    const msg = (err && err.message) ? err.message : "AI generation failed.";
+    let friendly = `AI Error: ${msg.slice(0, 180)}`;
+    if (/429|quota|resource_exhausted/i.test(msg)) {
+      friendly = "Free Gemini rate limit reached. Wait 30 seconds and try again.";
+    } else if (/api_key|permission_denied|unauthenticated/i.test(msg)) {
+      friendly = "Invalid GEMINI_API_KEY in Netlify Environment Variables.";
     }
+    return {
+      statusCode: 500,
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ detail: friendly })
+    };
   }
-
-  const msg = (lastErr && lastErr.message) ? lastErr.message : "AI generation failed.";
-  let friendly = `AI Error: ${msg.slice(0, 180)}`;
-  if (/429|quota|resource_exhausted/i.test(msg)) {
-    friendly = "Free Gemini rate limit reached. Wait 30 seconds and try again.";
-  } else if (/api_key|permission_denied|unauthenticated/i.test(msg)) {
-    friendly = "Invalid GEMINI_API_KEY in Netlify Environment Variables.";
-  }
-
-  return {
-    statusCode: 500,
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ detail: friendly })
-  };
 };

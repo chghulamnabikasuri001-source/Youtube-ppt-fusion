@@ -138,37 +138,67 @@ exports.handler = async (event) => {
     contents = `Section ${idx}/${total} (${body.time_range || ""}):\n\n${chunkText}`;
   }
 
+  // Netlify free functions ~10s par kill ho jate hain (tab 502 aata hai).
+  // Isliye hum khud 8.5s ka budget rakhte hain aur uske andar hi jawab ya friendly error dete hain.
+  const BUDGET_MS = 8500;
+  const MIN_LEFT_MS = 2500;
+  const startedAt = Date.now();
+  const withTimeout = (promise, ms) =>
+    Promise.race([
+      promise,
+      new Promise((_, rej) => setTimeout(() => rej(new Error("TIMEOUT")), ms))
+    ]);
+
   let sawBusy = false;
   let sawQuota = false;
+  let sawTimeout = false;
   let lastMsg = "";
+  let useThinkingOff = true; // thinking band = bohat tez jawab
 
   for (let i = 0; i < models.length; i++) {
     const model = models[i];
+    const left = BUDGET_MS - (Date.now() - startedAt);
+    if (left < MIN_LEFT_MS) {
+      sawTimeout = true;
+      break;
+    }
     try {
-      const response = await ai.models.generateContent({
-        model,
-        contents,
-        config: {
-          systemInstruction,
-          responseMimeType: "application/json",
-          temperature: 0.2
-        }
-      });
+      const config = {
+        systemInstruction,
+        responseMimeType: "application/json",
+        temperature: 0.2
+      };
+      if (useThinkingOff) config.thinkingConfig = { thinkingBudget: 0 };
+
+      const response = await withTimeout(
+        ai.models.generateContent({ model, contents, config }),
+        left
+      );
       const parsed = parseJsonSafe(response.text);
       return jsonResponse(200, parsed);
     } catch (err) {
       const m = (err && err.message) ? err.message : "";
       lastMsg = m;
 
-      if (isKeyErr(m)) break; // key galat hai, dusra model try karna bekar
+      if (m === "TIMEOUT") {
+        sawTimeout = true;
+        break;
+      }
+      if (isKeyErr(m)) break;
+
+      // Agar thinking setting is model ko pasand nahi aayi to bina uske dobara try
+      if (useThinkingOff && /thinking/i.test(m)) {
+        useThinkingOff = false;
+        i--;
+        continue;
+      }
 
       if (isBusyErr(m)) sawBusy = true;
       if (isQuotaErr(m)) sawQuota = true;
 
-      // Busy / quota / model band / bad JSON -> agla model try karo
       if (isBusyErr(m) || isQuotaErr(m) || isModelErr(m) || /invalid json/i.test(m)) {
         if (i < models.length - 1) {
-          await sleep(400);
+          await sleep(300);
           continue;
         }
       }
@@ -181,6 +211,9 @@ exports.handler = async (event) => {
 
   if (isKeyErr(lastMsg)) {
     friendly = "Invalid GEMINI_API_KEY in Netlify Environment Variables.";
+  } else if (sawTimeout) {
+    friendly = "AI took too long for this section. Click Generate again.";
+    status = 503;
   } else if (sawBusy) {
     friendly = "Google Gemini servers are temporarily busy (503). Wait 15 seconds and click Generate again.";
     status = 503;

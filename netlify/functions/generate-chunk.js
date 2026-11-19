@@ -69,27 +69,39 @@ function parseJsonSafe(raw) {
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
+const isBusyErr = (m) => /503|overloaded|unavailable|high demand/i.test(m);
+const isQuotaErr = (m) => /429|quota|resource_exhausted/i.test(m);
+const isModelErr = (m) => /404|not found|not supported|invalid model/i.test(m);
+
+function jsonResponse(statusCode, obj) {
+  return {
+    statusCode,
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(obj)
+  };
+}
+
 exports.handler = async (event) => {
   if (event.httpMethod !== "POST") {
-    return { statusCode: 405, body: JSON.stringify({ detail: "Method not allowed" }) };
+    return jsonResponse(405, { detail: "Method not allowed" });
   }
 
   const requiredPw = (process.env.APP_PASSWORD || "").trim();
   const sentPw = (event.headers["x-app-password"] || event.headers["X-App-Password"] || "").trim();
   if (requiredPw && sentPw !== requiredPw) {
-    return { statusCode: 401, body: JSON.stringify({ detail: "Incorrect or missing App Password." }) };
+    return jsonResponse(401, { detail: "Incorrect or missing App Password." });
   }
 
   const apiKey = (process.env.GEMINI_API_KEY || "").trim();
   if (!apiKey) {
-    return { statusCode: 500, body: JSON.stringify({ detail: "GEMINI_API_KEY is missing in Netlify Environment Variables." }) };
+    return jsonResponse(500, { detail: "GEMINI_API_KEY is missing in Netlify Environment Variables." });
   }
 
   let body;
   try {
     body = JSON.parse(event.body || "{}");
   } catch {
-    return { statusCode: 400, body: JSON.stringify({ detail: "Invalid request JSON." }) };
+    return jsonResponse(400, { detail: "Invalid request JSON." });
   }
 
   const lang = LANGS[body.lang_label] || "English";
@@ -100,7 +112,11 @@ exports.handler = async (event) => {
   const total = Number(body.total || 1);
 
   const ai = new GoogleGenAI({ apiKey });
-  const model = (process.env.GEMINI_MODEL || "gemini-3.8-flash").trim();
+
+  // Primary model first, then automatic fallbacks if it is busy / unavailable
+  const primary = (process.env.GEMINI_MODEL || "gemini-2.5-flash").trim();
+  const models = [...new Set([primary, "gemini-2.5-flash", "gemini-2.5-flash-lite"])];
+
   const systemInstruction = buildSystemPrompt(lang, perChunk, isFirst, videoMode);
 
   let contents;
@@ -115,13 +131,15 @@ exports.handler = async (event) => {
   } else {
     const chunkText = String(body.chunk_text || "").trim();
     if (!chunkText) {
-      return { statusCode: 400, body: JSON.stringify({ detail: "Empty transcript chunk." }) };
+      return jsonResponse(400, { detail: "Empty transcript chunk." });
     }
     contents = `Section ${idx}/${total} (${body.time_range || ""}):\n\n${chunkText}`;
   }
 
   let lastErr = null;
-  for (let attempt = 1; attempt <= 2; attempt++) {
+
+  for (let i = 0; i < models.length; i++) {
+    const model = models[i];
     try {
       const response = await ai.models.generateContent({
         model,
@@ -133,17 +151,16 @@ exports.handler = async (event) => {
         }
       });
       const parsed = parseJsonSafe(response.text);
-      return {
-        statusCode: 200,
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(parsed)
-      };
+      return jsonResponse(200, parsed);
     } catch (err) {
       lastErr = err;
       const m = (err && err.message) ? err.message : "";
-      if (/503|overloaded|unavailable/i.test(m) && attempt === 1) {
-        await sleep(1800);
-        continue;
+      // Busy / quota / wrong model name / bad JSON -> try next model quickly
+      if (isBusyErr(m) || isQuotaErr(m) || isModelErr(m) || /invalid json/i.test(m)) {
+        if (i < models.length - 1) {
+          await sleep(500);
+          continue;
+        }
       }
       break;
     }
@@ -151,17 +168,17 @@ exports.handler = async (event) => {
 
   const msg = (lastErr && lastErr.message) ? lastErr.message : "AI generation failed.";
   let friendly = `AI Error: ${msg.slice(0, 180)}`;
-  if (/503|overloaded|unavailable/i.test(msg)) {
+  let status = 500;
+
+  if (isBusyErr(msg)) {
     friendly = "Google Gemini servers are temporarily busy (503). Wait 15 seconds and click Generate again.";
-  } else if (/429|quota|resource_exhausted/i.test(msg)) {
+    status = 503;
+  } else if (isQuotaErr(msg)) {
     friendly = "Free Gemini rate limit reached. Wait 30 seconds and try again.";
+    status = 429;
   } else if (/api_key|permission_denied|unauthenticated/i.test(msg)) {
     friendly = "Invalid GEMINI_API_KEY in Netlify Environment Variables.";
   }
 
-  return {
-    statusCode: 500,
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ detail: friendly })
-  };
+  return jsonResponse(status, { detail: friendly });
 };

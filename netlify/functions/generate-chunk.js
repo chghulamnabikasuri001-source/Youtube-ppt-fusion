@@ -71,7 +71,8 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 const isBusyErr = (m) => /503|overloaded|unavailable|high demand/i.test(m);
 const isQuotaErr = (m) => /429|quota|resource_exhausted/i.test(m);
-const isModelErr = (m) => /404|not found|not supported|invalid model/i.test(m);
+const isModelErr = (m) => /404|not found|no longer available|not supported|invalid model/i.test(m);
+const isKeyErr = (m) => /api_key|api key|permission_denied|unauthenticated/i.test(m);
 
 function jsonResponse(statusCode, obj) {
   return {
@@ -113,9 +114,10 @@ exports.handler = async (event) => {
 
   const ai = new GoogleGenAI({ apiKey });
 
-  // Primary model first, then automatic fallbacks if it is busy / unavailable
-  const primary = (process.env.GEMINI_MODEL || "gemini-2.5-flash").trim();
-  const models = [...new Set([primary, "gemini-2.5-flash", "gemini-2.5-flash-lite"])];
+  // Model chain: primary first, then fallbacks.
+  // Purane models (gemini-2.5-flash / flash-lite) hata diye gaye hain kyun ke wo naye users ke liye band ho rahe hain.
+  const primary = (process.env.GEMINI_MODEL || "gemini-3.8-flash").trim();
+  const models = [...new Set([primary, "gemini-3.8-flash", "gemini-3.5-flash", "gemini-3.5-flash-lite"])];
 
   const systemInstruction = buildSystemPrompt(lang, perChunk, isFirst, videoMode);
 
@@ -136,7 +138,9 @@ exports.handler = async (event) => {
     contents = `Section ${idx}/${total} (${body.time_range || ""}):\n\n${chunkText}`;
   }
 
-  let lastErr = null;
+  let sawBusy = false;
+  let sawQuota = false;
+  let lastMsg = "";
 
   for (let i = 0; i < models.length; i++) {
     const model = models[i];
@@ -153,12 +157,18 @@ exports.handler = async (event) => {
       const parsed = parseJsonSafe(response.text);
       return jsonResponse(200, parsed);
     } catch (err) {
-      lastErr = err;
       const m = (err && err.message) ? err.message : "";
-      // Busy / quota / wrong model name / bad JSON -> try next model quickly
+      lastMsg = m;
+
+      if (isKeyErr(m)) break; // key galat hai, dusra model try karna bekar
+
+      if (isBusyErr(m)) sawBusy = true;
+      if (isQuotaErr(m)) sawQuota = true;
+
+      // Busy / quota / model band / bad JSON -> agla model try karo
       if (isBusyErr(m) || isQuotaErr(m) || isModelErr(m) || /invalid json/i.test(m)) {
         if (i < models.length - 1) {
-          await sleep(500);
+          await sleep(400);
           continue;
         }
       }
@@ -166,18 +176,19 @@ exports.handler = async (event) => {
     }
   }
 
-  const msg = (lastErr && lastErr.message) ? lastErr.message : "AI generation failed.";
-  let friendly = `AI Error: ${msg.slice(0, 180)}`;
+  let friendly = `AI Error: ${lastMsg.slice(0, 180) || "AI generation failed."}`;
   let status = 500;
 
-  if (isBusyErr(msg)) {
+  if (isKeyErr(lastMsg)) {
+    friendly = "Invalid GEMINI_API_KEY in Netlify Environment Variables.";
+  } else if (sawBusy) {
     friendly = "Google Gemini servers are temporarily busy (503). Wait 15 seconds and click Generate again.";
     status = 503;
-  } else if (isQuotaErr(msg)) {
+  } else if (sawQuota) {
     friendly = "Free Gemini rate limit reached. Wait 30 seconds and try again.";
     status = 429;
-  } else if (/api_key|permission_denied|unauthenticated/i.test(msg)) {
-    friendly = "Invalid GEMINI_API_KEY in Netlify Environment Variables.";
+  } else if (isModelErr(lastMsg)) {
+    friendly = "Gemini model name is no longer available. In Netlify, set GEMINI_MODEL to gemini-3.8-flash (or delete that variable) and redeploy.";
   }
 
   return jsonResponse(status, { detail: friendly });

@@ -332,3 +332,13 @@ input:focus, select:focus, textarea:focus {
 .btn-ghost { background: transparent; border: 1px solid var(--line); border-radius: 8px; padding: 0.25rem 0.65rem; font-size: 0.78rem; color: var(--muted); cursor: pointer; }
 .history-list { display: flex; flex-direction: column; gap: 0.5rem; }
 .history-item { display: flex; justify-content: space-between; align-items: center; padding: 0.6rem 0.85rem; border: 1px solid var(--line); border-radius: 12px; background: #fff; font-size: 0.88rem; }
+.site-footer {
+  text-align: center;
+  padding: 0.5rem 1rem 2rem;
+  font-size: 0.78rem;
+  font-weight: 500;
+  letter-spacing: 0.04em;
+  color: #94a3b8;
+  opacity: 0.8;
+}
+

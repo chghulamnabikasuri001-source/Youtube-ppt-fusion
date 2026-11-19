@@ -22,7 +22,8 @@ function renderSwatches(themeName) {
   $("swatch-label").textContent = `${themeName} palette`;
 }
 
-async function safeFetchJson(url, options) {
+// Auto-retry: agar Gemini busy (503) ya rate limit (429) ho to khud dobara try karta hai
+async function safeFetchJson(url, options, retries = 2) {
   const res = await fetch(url, options);
   const raw = await res.text();
   let data;
@@ -37,6 +38,10 @@ async function safeFetchJson(url, options) {
     throw new Error(`Unexpected server response (${res.status}).`);
   }
   if (!res.ok) {
+    if ((res.status === 503 || res.status === 429) && retries > 0) {
+      await new Promise((r) => setTimeout(r, 4000));
+      return safeFetchJson(url, options, retries - 1);
+    }
     throw new Error(data.detail || `Request failed (${res.status}).`);
   }
   return data;

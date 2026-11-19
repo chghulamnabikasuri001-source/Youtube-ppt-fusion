@@ -38,7 +38,7 @@ async function safeFetchJson(url, options, retries = 2) {
     throw new Error(`Unexpected server response (${res.status}).`);
   }
   if (!res.ok) {
-    if ((res.status === 503 || res.status === 429) && retries > 0) {
+    if ((res.status === 502 || res.status === 503 || res.status === 504 || res.status === 429) && retries > 0) {
       await new Promise((r) => setTimeout(r, 4000));
       return safeFetchJson(url, options, retries - 1);
     }
@@ -73,7 +73,7 @@ function parseManualTranscript(text) {
   return snips;
 }
 
-function splitChunks(snips, maxCharsPerChunk = 5000, maxTotalChars = 150000) {
+function splitChunks(snips, maxCharsPerChunk = 2500, maxTotalChars = 150000) {
   const chunks = [];
   let cur = [];
   let n = 0;
